@@ -7,7 +7,7 @@ on:
     - cron: '00 23 * * 4'   # Thu 6:00 PM CT
     - cron: '30 17 * * 0'   # Sun 12:30 PM CT
     - cron: '30 03 * * 1'   # Mon 10:30 PM CT
-  workflow_dispatch: {}   # shows the Run workflow button
+  workflow_dispatch: {}   # keeps the Run workflow button
 
 jobs:
   run:
