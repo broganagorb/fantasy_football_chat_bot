@@ -26,6 +26,16 @@ jobs:
           python -m pip install -U pip
           python -m pip install apscheduler requests espn_api DateTime
 
+      - name: Test Discord webhook
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -sS -H "Content-Type: application/json" \
+            -d '{"content":"✅ Webhook test from GitHub Actions"}' \
+            "$DISCORD_WEBHOOK_URL" -D /tmp/h
+          echo "HTTP status:"
+          tail -n 1 /tmp/h
+
       - name: Run ESPN bot once
         run: |
           python - <<'PY'
