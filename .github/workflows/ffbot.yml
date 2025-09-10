@@ -38,25 +38,63 @@ jobs:
           
       - name: Test ESPN connectivity
         env:
-          LEAGUE_ID:  ${{ secrets.LEAGUE_ID }}
+          LEAGUE_ID:   ${{ secrets.LEAGUE_ID }}
           LEAGUE_YEAR: ${{ secrets.LEAGUE_YEAR }}
-          ESPN_S2:    ${{ secrets.ESPN_S2 }}
-          SWID:       ${{ secrets.SWID }}
+          ESPN_S2:     ${{ secrets.ESPN_S2 }}
+          SWID:        ${{ secrets.SWID }}
         run: |
           python - <<'PY'
           import os, sys
           from espn_api.football import League
           try:
-              lid  = int(os.environ['LEAGUE_ID'])
-              year = int(os.environ['LEAGUE_YEAR'])
-              s2   = os.environ.get('ESPN_S2') or None
-              swid = os.environ.get('SWID') or None
-              lg   = League(league_id=lid, year=year, espn_s2=s2, swid=swid)
-              print("✅ ESPN OK:", lg.settings.name)
+              lid  = int(os.environ["LEAGUE_ID"])
+              year = int(os.environ["LEAGUE_YEAR"])
+              lg = League(league_id=lid, year=year,
+                          espn_s2=os.environ.get("ESPN_S2"),
+                          swid=os.environ.get("SWID"))
+              print("✅ ESPN OK:", lg.settings.name, year)
           except Exception as e:
               print("❌ ESPN ERROR:", e)
               sys.exit(1)
           PY
+
+      - name: Force post standings to Discord (sanity check)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LEAGUE_ID:           ${{ secrets.LEAGUE_ID }}
+          LEAGUE_YEAR:         ${{ secrets.LEAGUE_YEAR }}
+          ESPN_S2:             ${{ secrets.ESPN_S2 }}
+          SWID:                ${{ secrets.SWID }}
+        run: |
+          python - <<'PY'
+          import os, json, requests
+          from espn_api.football import League
+
+          lid  = int(os.environ["LEAGUE_ID"])
+          year = int(os.environ["LEAGUE_YEAR"])
+          lg = League(league_id=lid, year=year,
+                      espn_s2=os.environ.get("ESPN_S2"),
+                      swid=os.environ.get("SWID"))
+
+          # Build a short standings message
+          try:
+              teams = lg.standings()  # returns list of Team objects sorted by standing
+          except Exception:
+              teams = lg.teams        # fallback; not always sorted
+
+          lines = [f"**{lg.settings.name}** ({year}) — quick standings"]
+          for idx, t in enumerate(teams, start=1):
+              rec = f"{t.wins}-{t.losses}" + (f"-{t.ties}" if getattr(t, 'ties', 0) else "")
+              pf  = getattr(t, 'points_for', None)
+              lines.append(f"{idx}. {t.team_name} ({rec})" + (f" PF:{pf:.1f}" if isinstance(pf,(int,float)) else ""))
+
+          payload = {"content": "\n".join(lines)[:1900]}  # keep under 2000 chars
+          r = requests.post(os.environ["DISCORD_WEBHOOK_URL"],
+                            headers={"Content-Type":"application/json"},
+                            data=json.dumps(payload))
+          print("Discord status:", r.status_code, r.text[:200])
+          PY
+
 
       - name: Run ESPN bot once
         run: |
