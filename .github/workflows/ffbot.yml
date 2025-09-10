@@ -24,7 +24,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install -U pip
-          python -m pip install apscheduler requests espn_api DateTime
+          python -m pip install apscheduler requests espn_api DateTime   
 
       - name: Test Discord webhook
         env:
@@ -35,6 +35,28 @@ jobs:
             "$DISCORD_WEBHOOK_URL" -D /tmp/h
           echo "HTTP status:"
           tail -n 1 /tmp/h
+          
+      - name: Test ESPN connectivity
+        env:
+          LEAGUE_ID:  ${{ secrets.LEAGUE_ID }}
+          LEAGUE_YEAR: ${{ secrets.LEAGUE_YEAR }}
+          ESPN_S2:    ${{ secrets.ESPN_S2 }}
+          SWID:       ${{ secrets.SWID }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          from espn_api.football import League
+          try:
+              lid  = int(os.environ['LEAGUE_ID'])
+              year = int(os.environ['LEAGUE_YEAR'])
+              s2   = os.environ.get('ESPN_S2') or None
+              swid = os.environ.get('SWID') or None
+              lg   = League(league_id=lid, year=year, espn_s2=s2, swid=swid)
+              print("✅ ESPN OK:", lg.settings.name)
+          except Exception as e:
+              print("❌ ESPN ERROR:", e)
+              sys.exit(1)
+          PY
 
       - name: Run ESPN bot once
         run: |
