@@ -2,31 +2,28 @@ name: ESPN Discord Bot
 
 on:
   schedule:
-    - cron: '30 15 * * 2'   # Tue 10:30 AM CT
-    - cron: '00 23 * * 4'   # Thu 6:00 PM CT
-    - cron: '30 17 * * 0'   # Sun 12:30 PM CT
-    - cron: '30 03 * * 1'   # Mon 10:30 PM CT
+    - cron: '30 17 * * 0'   # Sun 12:30 PM CT  (live scores)
+    - cron: '30 03 * * 2'   # Mon 10:30 PM CT  (close games wrap-up)
+    - cron: '30 15 * * 2'   # Tue 10:30 AM CT  (weekly recap)
+    - cron: '00 23 * * 4'   # Thu 6:00 PM CT   (matchup previews)
   workflow_dispatch: {}
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
       - name: Install deps
         run: |
           python -m pip install -U pip
-          python -m pip install apscheduler requests espn_api DateTime
+          python -m pip install requests espn_api DateTime
 
-      # 1) Always post a short standings snapshot (guaranteed output)
-      - name: Post standings snapshot
+      # --- SUN 12:30 PM CT: LIVE SCORES (guaranteed)
+      - name: Post live scores (Sun)
+        if: ${{ contains(github.event.schedule, '30 17 * * 0') }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           LEAGUE_ID:           ${{ secrets.LEAGUE_ID }}
@@ -37,31 +34,143 @@ jobs:
           python - <<'PY'
           import os, json, requests
           from espn_api.football import League
-          lid  = int(os.environ["LEAGUE_ID"])
-          year = int(os.environ["LEAGUE_YEAR"])
-          lg = League(league_id=lid, year=year,
-                      espn_s2=os.environ.get("ESPN_S2"),
-                      swid=os.environ.get("SWID"))
-          try:
-              teams = lg.standings()
-          except Exception:
-              teams = lg.teams
-          lines = [f"**{lg.settings.name}** ({year}) — standings snapshot"]
-          for idx, t in enumerate(teams, start=1):
-              rec = f"{t.wins}-{t.losses}" + (f"-{t.ties}" if getattr(t,'ties',0) else "")
-              pf  = getattr(t, 'points_for', None)
-              lines.append(f"{idx}. {t.team_name} ({rec})" + (f" PF:{pf:.1f}" if isinstance(pf,(int,float)) else ""))
-          requests.post(os.environ["DISCORD_WEBHOOK_URL"],
-                        headers={"Content-Type":"application/json"},
+          lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
+          lg  = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
+          wk  = getattr(lg,"current_week",1) or 1
+          sb  = lg.scoreboard(wk)
+          lines = [f"**Week {wk} — Live Scores (Sun 12:30 CT)**"]
+          for g in sb:
+            h,a = g.home_team, g.away_team
+            hs,as_ = g.home_score or 0, g.away_score or 0
+            lines.append(f"- {h.team_name} {hs:.1f}  vs  {a.team_name} {as_:.1f}")
+          if len(lines)==1: lines.append("_No games returned yet._")
+          requests.post(os.environ["DISCORD_WEBHOOK_URL"], headers={"Content-Type":"application/json"},
                         data=json.dumps({"content":"\n".join(lines)[:1900]}))
           PY
 
-      # 2) Run the full ESPN bot once (richer posts when its internal logic triggers)
-      - name: Run ESPN bot once
+      # --- MON 10:30 PM CT: CLOSE GAMES & WRAP-UP (guaranteed)
+      - name: Post close games wrap-up (Mon)
+        if: ${{ contains(github.event.schedule, '30 03 * * 2') }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LEAGUE_ID:           ${{ secrets.LEAGUE_ID }}
+          LEAGUE_YEAR:         ${{ secrets.LEAGUE_YEAR }}
+          ESPN_S2:             ${{ secrets.ESPN_S2 }}
+          SWID:                ${{ secrets.SWID }}
         run: |
           python - <<'PY'
-          from gamedaybot.espn import espn_bot
-          espn_bot.espn_bot("init")
+          import os, json, requests
+          from espn_api.football import League
+          lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
+          lg  = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
+          wk  = getattr(lg,"current_week",1) or 1
+          sb  = lg.scoreboard(wk)
+          games = []
+          for g in sb:
+            hs,as_ = g.home_score or 0, g.away_score or 0
+            margin = abs(hs - as_)
+            h,a = g.home_team, g.away_team
+            games.append((margin, f"- {h.team_name} {hs:.1f}  vs  {a.team_name} {as_:.1f}  (Δ {margin:.1f})"))
+          games.sort(key=lambda x:x[0])
+          lines = [f"**Week {wk} — Close Games & Wrap-Up (Mon 10:30 CT)**"]
+          lines += [g for _,g in games[:3]] or ["_No games available._"]
+          requests.post(os.environ["DISCORD_WEBHOOK_URL"], headers={"Content-Type":"application/json"},
+                        data=json.dumps({"content":"\n".join(lines)[:1900]}))
+          PY
+
+      # --- TUE 10:30 AM CT: WEEKLY RECAP (scores, standings, simple trophies)
+      - name: Post weekly recap (Tue)
+        if: ${{ contains(github.event.schedule, '30 15 * * 2') }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LEAGUE_ID:           ${{ secrets.LEAGUE_ID }}
+          LEAGUE_YEAR:         ${{ secrets.LEAGUE_YEAR }}
+          ESPN_S2:             ${{ secrets.ESPN_S2 }}
+          SWID:                ${{ secrets.SWID }}
+        run: |
+          python - <<'PY'
+          import os, json, requests
+          from espn_api.football import League
+          lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
+          lg   = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
+          wk   = getattr(lg,"current_week",1) or 1
+          # Final scores
+          sb   = lg.scoreboard(wk-1) if wk>1 else lg.scoreboard(wk)
+          score_lines = ["**Final Scores**"]
+          hi_team, hi_pts = None, -1
+          blow, blow_m = None, -1
+          for g in sb:
+            hs,as_ = g.home_score or 0, g.away_score or 0
+            h,a = g.home_team, g.away_team
+            score_lines.append(f"- {h.team_name} {hs:.1f}  vs  {a.team_name} {as_:.1f}")
+            # trophies (simple)
+            for name,pts in [(h.team_name,hs),(a.team_name,as_)]:
+              if pts > hi_pts: hi_pts, hi_team = pts, name
+            m = abs(hs-as_)
+            if m > blow_m:
+              blow_m = m
+              winner = h if hs>=as_ else a
+              loser  = a if winner is h else h
+              blow   = f"{winner.team_name} over {loser.team_name}"
+          # Standings
+          try:
+            standings = lg.standings()
+          except Exception:
+            standings = lg.teams
+          stand_lines = ["**Standings Snapshot**"]
+          for i,t in enumerate(standings,1):
+            rec = f"{t.wins}-{t.losses}" + (f"-{t.ties}" if getattr(t,'ties',0) else "")
+            pf  = getattr(t,'points_for',None)
+            stand_lines.append(f"{i}. {t.team_name} ({rec})" + (f" PF:{pf:.1f}" if isinstance(pf,(int,float)) else ""))
+          # Compose
+          lines = [f"**Week {wk-1 if wk>1 else wk} Recap (Tue 10:30 CT)**"]
+          lines += score_lines
+          lines += ["", "**Trophies**",
+                    f"🏆 High Score: **{hi_team}** — {hi_pts:.1f}",
+                    f"💥 Biggest Blowout: **{blow}** — Δ{blow_m:.1f}"]
+          lines += ["", *stand_lines]
+          requests.post(os.environ["DISCORD_WEBHOOK_URL"], headers={"Content-Type":"application/json"},
+                        data=json.dumps({"content":"\n".join(lines)[:1900]}))
+          PY
+
+      # --- THU 6:00 PM CT: MATCHUP PREVIEWS (guaranteed)
+      - name: Post matchup previews (Thu)
+        if: ${{ contains(github.event.schedule, '00 23 * * 4') }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          LEAGUE_ID:           ${{ secrets.LEAGUE_ID }}
+          LEAGUE_YEAR:         ${{ secrets.LEAGUE_YEAR }}
+          ESPN_S2:             ${{ secrets.ESPN_S2 }}
+          SWID:                ${{ secrets.SWID }}
+        run: |
+          python - <<'PY'
+          import os, json, requests
+          from espn_api.football import League
+          lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
+          lg  = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
+          wk  = getattr(lg,"current_week",1) or 1
+          # try next week; fallback to current
+          try:
+            sched = lg.scoreboard(wk+1); target = wk+1
+          except Exception:
+            sched = lg.scoreboard(wk);   target = wk
+          lines = [f"**Week {target} Matchups (Thu 6:00 CT)**"]
+          for g in sched:
+            h,a = g.home_team, g.away_team
+            lines.append(f"- {h.team_name} ({h.wins}-{h.losses}) vs {a.team_name} ({a.wins}-{a.losses})")
+          requests.post(os.environ["DISCORD_WEBHOOK_URL"], headers={"Content-Type":"application/json"},
+                        data=json.dumps({"content":"\n".join(lines)[:1900]}))
+          PY
+
+      # --- Also try the upstream bot once (optional richer posts when it fires)
+      - name: Run upstream ESPN bot (optional)
+        run: |
+          python - <<'PY'
+          try:
+            from gamedaybot.espn import espn_bot
+            espn_bot.espn_bot("init")
+          except Exception as e:
+            print("Note: upstream bot skipped or failed:", e)
           PY
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -72,3 +181,4 @@ jobs:
           SWID:                ${{ secrets.SWID }}
           START_DATE:          ${{ secrets.START_DATE }}
           END_DATE:            ${{ secrets.END_DATE }}
+
