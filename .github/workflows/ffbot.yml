@@ -41,18 +41,37 @@ jobs:
           SWID:                ${{ secrets.SWID }}
         run: |
           python - <<'PY'
-          import os, json, requests
+          import os, json, requests, math
           from espn_api.football import League
+
+          def val(p):
+            for k in ("points","applied_total","total_points","projected_points"):
+              v = getattr(p,k,None)
+              if isinstance(v,(int,float)) and not math.isnan(v) and v != 0:
+                return float(v)
+            # last resort
+            v = getattr(p,"points",0) or 0
+            return float(v) if isinstance(v,(int,float)) else 0.0
+
+          def team_total(lineup):
+            pts = [val(p) for p in lineup if getattr(p,"slot_position","") not in ("BE","IR")]
+            return round(sum(pts),1) if pts else 0.0
+
           lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
           lg  = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
-          wk  = getattr(lg,"current_week",1)
-          sb  = lg.scoreboard(wk)
+          wk  = getattr(lg,"current_week",1) or 1
+          bx  = lg.box_scores(wk)
+
           lines = [f"**Week {wk} — Live Scores (Sun 12:30 CT)**"]
-          for g in sb:
-            h,a = g.home_team, g.away_team
-            hs,as_ = g.home_score or 0, g.away_score or 0
-            lines.append(f"- {h.team_name} {hs:.1f} vs {a.team_name} {as_:.1f}")
-          if len(lines)==1: lines.append("_No games returned yet._")
+          if not bx:
+            lines.append("_No box scores yet._")
+          else:
+            for g in bx:
+              hs = team_total(g.home_lineup)
+              as_ = team_total(g.away_lineup)
+              h, a = g.home_team, g.away_team
+              lines.append(f"- {h.team_name} {hs:.1f}  vs  {a.team_name} {as_:.1f}")
+
           requests.post(os.environ["DISCORD_WEBHOOK_URL"],
                         headers={"Content-Type":"application/json"},
                         data=json.dumps({"content":"\n".join(lines)[:1900]}))
@@ -71,25 +90,42 @@ jobs:
           SWID:                ${{ secrets.SWID }}
         run: |
           python - <<'PY'
-          import os, json, requests
+          import os, json, requests, math
           from espn_api.football import League
+
+          def val(p):
+            for k in ("points","applied_total","total_points","projected_points"):
+              v = getattr(p,k,None)
+              if isinstance(v,(int,float)) and not math.isnan(v) and v != 0:
+                return float(v)
+            v = getattr(p,"points",0) or 0
+            return float(v) if isinstance(v,(int,float)) else 0.0
+
+          def tot(lineup):
+            pts = [val(p) for p in lineup if getattr(p,"slot_position","") not in ("BE","IR")]
+            return round(sum(pts),1) if pts else 0.0
+
           lid, yr = int(os.environ["LEAGUE_ID"]), int(os.environ["LEAGUE_YEAR"])
           lg  = League(lid, yr, espn_s2=os.environ.get("ESPN_S2"), swid=os.environ.get("SWID"))
-          wk  = getattr(lg,"current_week",1)
-          sb  = lg.scoreboard(wk)
+          wk  = getattr(lg,"current_week",1) or 1
+          bx  = lg.box_scores(wk)
+
           games = []
-          for g in sb:
-            hs,as_ = g.home_score or 0, g.away_score or 0
+          for g in bx:
+            hs, as_ = tot(g.home_lineup), tot(g.away_lineup)
+            h, a = g.home_team, g.away_team
             margin = abs(hs - as_)
-            h,a = g.home_team, g.away_team
-            games.append((margin, f"- {h.team_name} {hs:.1f} vs {a.team_name} {as_:.1f} (Δ {margin:.1f})"))
+            games.append((margin, f"- {h.team_name} {hs:.1f}  vs  {a.team_name} {as_:.1f}  (Δ {margin:.1f})"))
+
           games.sort(key=lambda x:x[0])
           lines = [f"**Week {wk} — Close Games & Wrap-Up (Mon 10:30 CT)**"]
-          lines += [g for _,g in games[:3]] or ["_No games available._"]
+          lines += [g for _, g in games[:3]] or ["_No games available._"]
+
           requests.post(os.environ["DISCORD_WEBHOOK_URL"],
                         headers={"Content-Type":"application/json"},
                         data=json.dumps({"content":"\n".join(lines)[:1900]}))
           PY
+
 
       # TUE: weekly recap
       - name: Post weekly recap (Tue)
